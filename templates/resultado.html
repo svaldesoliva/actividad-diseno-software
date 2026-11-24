@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+  <section class="result-card result-{{ tone }}">
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <a class="btn store-button" href="/">Volver a la tienda</a>
+  </section>
+{% endblock %}

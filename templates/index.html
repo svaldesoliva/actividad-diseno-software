@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ product.title }}{% endblock %}
+{% block content %}
+  <article class="product">
+    <div class="product-photo">
+      <img src="/static/agua-vital.jpg" alt="Botella de Agua Vital con gas de 1,6 litros"
+           width="600" height="600" fetchpriority="high">
+    </div>
+    <div class="product-details">
+      <p class="product-size">1,6 lt</p>
+      <h1>{{ product.title }}</h1>
+      <p class="product-price">{{ price }} <span>{{ product.currency_id }}</span></p>
+      {% if mp_public_key %}
+        <div id="wallet-brick" data-public-key="{{ mp_public_key }}"></div>
+        <p id="checkout-error" class="text-danger" role="status" hidden>
+          El botón de Mercado Pago tuvo un problema. Puedes abrir el checkout con el botón de abajo.
+        </p>
+      {% endif %}
+      <form id="checkout-form" method="post" action="/comprar">
+        <button class="btn store-button" type="submit">Pagar con Mercado Pago</button>
+      </form>
+      <p class="test-note">Test. No se usa dinero real.</p>
+    </div>
+  </article>
+  {% if mp_public_key %}
+    <script src="https://sdk.mercadopago.com/js/v2" defer></script>
+    <script src="/static/checkout.js" defer></script>
+  {% endif %}
+{% endblock %}

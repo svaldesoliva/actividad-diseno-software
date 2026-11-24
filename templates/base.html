@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es-CL">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{% endblock %} · Tienda</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.9/dist/css/bootstrap.min.css"
+          integrity="sha384-yEPZ7jP9S0QKiUQ0m3jjsO4ProIW7wvR9gXkI7JOGa2XVsw53Yke2bsdkBbjmmiX" crossorigin="anonymous">
+    <link rel="stylesheet" href="/static/tienda.css">
+  </head>
+  <body>
+    <header class="store-header">
+      <div class="container store-bar">
+        <a class="store-name" href="/">Tienda</a>
+      </div>
+    </header>
+    <main class="container store-main">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
