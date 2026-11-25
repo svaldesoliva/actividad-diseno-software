@@ -1,14 +1,17 @@
 import logging
 import os
 import re
+from hashlib import sha256
 from pathlib import Path
+from secrets import token_hex
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -18,16 +21,25 @@ MP_API = "https://api.mercadopago.com"
 PRODUCT = {
     "id": "vital-con-gas-16l",
     "title": "Agua Vital con gas",
-    "quantity": 1,
     "unit_price": 1000,
     "currency_id": "CLP",
 }
-PRICE_LABEL = f"${PRODUCT['unit_price']:,}".replace(",", ".")
+CART_COOKIE = "agua_vital_cart"
+MAX_CART_QUANTITY = 99
+CART_REVISION_PATTERN = r"[0-9a-f]{16}"
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 logger = logging.getLogger("uvicorn.error")
+
+
+def asset_url(filename: str) -> str:
+    revision = sha256((ROOT / "static" / filename).read_bytes()).hexdigest()[:12]
+    return f"/static/{filename}?v={revision}"
+
+
+templates.env.globals["asset_url"] = asset_url
 
 
 def mercado_pago(method: str, path: str, token: str, **kwargs) -> dict:
@@ -57,21 +69,81 @@ def result_page(
     )
 
 
+def price_label(amount: int) -> str:
+    return f"${amount:,}".replace(",", ".")
+
+
+def cart_state(request: Request) -> tuple[int, str]:
+    cookie = request.cookies.get(CART_COOKIE, "")
+    match = re.fullmatch(rf"([1-9][0-9]{{0,2}})-({CART_REVISION_PATTERN})", cookie)
+    if match and int(match[1]) <= MAX_CART_QUANTITY:
+        return int(match[1]), match[2]
+    return 0, ""
+
+
 @app.get("/")
 def storefront(request: Request):
+    quantity, revision = cart_state(request)
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "product": PRODUCT,
-            "price": PRICE_LABEL,
+            "price": price_label(PRODUCT["unit_price"]),
+            "quantity": quantity,
+            "max_quantity": MAX_CART_QUANTITY,
+            "revision": revision,
+            "total": price_label(quantity * PRODUCT["unit_price"]),
             "mp_public_key": os.getenv("MP_TEST_PUBLIC_KEY", "").strip(),
         },
+        headers={"Cache-Control": "no-store"},
     )
 
 
+@app.get("/carrito")
+def cart_redirect():
+    return RedirectResponse("/#compra", status_code=303)
+
+
+@app.post("/carrito/{action}")
+def update_cart(request: Request, action: Literal["agregar", "quitar"]):
+    quantity, revision = cart_state(request)
+    change = 1 if action == "agregar" else -1
+    updated_quantity = min(MAX_CART_QUANTITY, max(0, quantity + change))
+    changed = updated_quantity != quantity
+    if changed:
+        revision = token_hex(8) if updated_quantity else ""
+
+    if request.headers.get("accept") == "application/json":
+        response = JSONResponse(
+            {
+                "quantity": updated_quantity,
+                "total": price_label(updated_quantity * PRODUCT["unit_price"]),
+                "revision": revision,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    else:
+        response = RedirectResponse("/#compra", status_code=303)
+
+    if not updated_quantity:
+        response.delete_cookie(CART_COOKIE)
+    elif changed:
+        response.set_cookie(
+            CART_COOKIE,
+            f"{updated_quantity}-{revision}",
+            httponly=True,
+            secure=request.url.scheme == "https",
+        )
+    return response
+
+
 @app.post("/comprar")
-def buy(request: Request):
+def buy(request: Request, revision: str = ""):
+    quantity, cart_revision = cart_state(request)
+    if not quantity or revision != cart_revision:
+        return RedirectResponse("/#compra", status_code=303)
+
     token = os.getenv("MP_TEST_ACCESS_TOKEN", "").strip()
     base_url = os.getenv("APP_BASE_URL", "").strip().rstrip("/")
     if not token or not re.fullmatch(r"https://[\w-]+(?:\.[\w-]+)+(?::\d+)?", base_url):
@@ -85,6 +157,7 @@ def buy(request: Request):
 
     reference = uuid4().hex
     return_url = f"{base_url}/resultado/{reference}"
+    expected_total = quantity * PRODUCT["unit_price"]
     try:
         seller = mercado_pago("GET", "/users/me", token)
         tags = seller.get("tags")
@@ -102,8 +175,8 @@ def buy(request: Request):
             "/checkout/preferences",
             token,
             json={
-                "items": [PRODUCT],
-                "external_reference": reference,
+                "items": [{**PRODUCT, "quantity": quantity}],
+                "external_reference": f"{reference}-{expected_total}-{cart_revision}",
                 "back_urls": dict.fromkeys(("success", "pending", "failure"), return_url),
                 "auto_return": "approved",
             },
@@ -182,9 +255,20 @@ def payment_result(request: Request, reference: UUID, payment_id: str = ""):
             502,
         )
 
+    external_reference = payment.get("external_reference")
+    snapshot = re.fullmatch(
+        rf"{reference.hex}-([1-9][0-9]{{0,11}})-({CART_REVISION_PATTERN})",
+        external_reference if isinstance(external_reference, str) else "",
+    )
+    expected_total, cart_revision = None, ""
+    if snapshot:
+        expected_total, cart_revision = int(snapshot[1]), snapshot[2]
+    elif external_reference == reference.hex:
+        expected_total = PRODUCT["unit_price"]
+
     if (
-        payment.get("external_reference") != reference.hex
-        or payment.get("transaction_amount") != PRODUCT["unit_price"]
+        expected_total is None
+        or payment.get("transaction_amount") != expected_total
         or payment.get("currency_id") != PRODUCT["currency_id"]
     ):
         return result_page(
@@ -195,7 +279,10 @@ def payment_result(request: Request, reference: UUID, payment_id: str = ""):
     if status in ("in_process", "authorized"):
         status = "pending"
     if isinstance(status, str) and status in PAYMENT_RESULTS:
-        return result_page(request, *PAYMENT_RESULTS[status])
+        response = result_page(request, *PAYMENT_RESULTS[status])
+        if status == "approved" and cart_revision and cart_revision == cart_state(request)[1]:
+            response.delete_cookie(CART_COOKIE)
+        return response
     return result_page(
         request, "Pago sin confirmar", "Mercado Pago devolvió un estado sin confirmación.", "warning"
     )

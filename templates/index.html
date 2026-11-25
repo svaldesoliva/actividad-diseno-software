@@ -10,20 +10,33 @@
       <p class="product-size">1,6 lt</p>
       <h1>{{ product.title }}</h1>
       <p class="product-price">{{ price }} <span>{{ product.currency_id }}</span></p>
-      {% if mp_public_key %}
-        <div id="wallet-brick" data-public-key="{{ mp_public_key }}"></div>
-        <p id="checkout-error" class="text-danger" role="status" hidden>
-          El botón de Mercado Pago tuvo un problema. Puedes abrir el checkout con el botón de abajo.
-        </p>
-      {% endif %}
-      <form id="checkout-form" method="post" action="/comprar">
-        <button class="btn store-button" type="submit">Pagar con Mercado Pago</button>
-      </form>
-      <p class="test-note">Test. No se usa dinero real.</p>
+      <div id="compra">
+        <form class="product-actions" method="post" action="/carrito/agregar" data-max-quantity="{{ max_quantity }}">
+          <button class="btn store-button add-button" type="submit"{% if quantity %} hidden{% endif %}>Agregar al carrito</button>
+          <div class="cart-quantity"{% if not quantity %} hidden{% endif %}>
+            <button type="submit" formaction="/carrito/quitar" aria-label="Quitar una botella">−</button>
+            <output aria-label="Cantidad de botellas">{{ quantity }}</output>
+            <button type="submit" aria-label="Agregar una botella"{% if quantity >= max_quantity %} disabled{% endif %}>+</button>
+          </div>
+        </form>
+        <p id="cart-error" class="checkout-error" role="status" hidden>No se pudo actualizar la cantidad. Inténtalo otra vez.</p>
+        <p class="cart-total">Total <strong><span id="cart-total-value">{{ total }}</span> <small>{{ product.currency_id }}</small></strong></p>
+        <div class="cart-payment">
+          {% if mp_public_key %}
+            <div id="wallet-brick" class="wallet-pending" data-public-key="{{ mp_public_key }}" hidden></div>
+            <p id="checkout-error" class="checkout-error" role="status" hidden>
+              Puedes abrir Mercado Pago con el botón de abajo.
+            </p>
+          {% endif %}
+          <form id="checkout-form" method="post" action="/comprar?revision={{ revision }}">
+            <button class="btn store-button" type="submit"{% if not quantity %} disabled{% endif %}>
+              Pagar con Mercado Pago
+            </button>
+          </form>
+        </div>
+        <p class="test-note">Pago de prueba. No se usa dinero real.</p>
+      </div>
     </div>
   </article>
-  {% if mp_public_key %}
-    <script src="https://sdk.mercadopago.com/js/v2" defer></script>
-    <script src="/static/checkout.js" defer></script>
-  {% endif %}
+  <script src="{{ asset_url('checkout.js') if asset_url is defined else '/static/checkout.js?v=1fdd04f970c2' }}" defer></script>
 {% endblock %}
